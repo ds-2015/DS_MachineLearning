@@ -1,0 +1,132 @@
+---
+title: "Activity Quantification by Machine Learning"
+date: "Saturday, December 20, 2014"
+output: html_document
+---
+
+# Data Exploration
+The goal of this project is to predict the manner in which the participants did the exercise (quantify how well they do it), using data from accelerometers on the belt, forearm, arm, and dumbbell of the 6 participants. 
+
+The data is from the website  http://groupware.les.inf.puc-rio.br/har (see the Weight Lifting Exercise Dataset). 
+
+After loading the training and testing data, I first explore the data by 
+
+```{r, include=FALSE, cache=TRUE}
+library(caret)
+library(randomForest)
+setwd("C:/_ds/07ML/PA")
+pmltrain_orig<-read.csv("pml-training.csv")
+pmltest_orig<-read.csv("pml-testing.csv")
+```
+
+```{r Exploratory_Data, cache=TRUE}
+dim(pmltrain_orig)
+dim(pmltest_orig)
+```
+
+```{r, eval=FALSE}
+head(pmltrain_orig,3)
+head(pmltest_orig,3)
+```
+
+The prediction outcome is the last variable "classe" in the training data, thus the remaining 159 variables can be used as predictors. 
+I find there are many NA values in both the training and testing variables. Since there is a large number (in total 159) of variables can be used as predictors, I decide to remove all variables that have NA values in either the training or testing data. Because the variables with NAs in the training data is a subset of the variables with NAs in the testing data, I only keep the variables in the testing data without NAs. 
+
+```{r remov_NA, results='hide'}
+natrain<-colSums(is.na(pmltrain_orig)) > 0
+natest<-colSums(is.na(pmltest_orig)) > 0
+training<-pmltrain_orig[,!natest]
+testing<-pmltest_orig[,!natest]
+```
+
+Furthermore, variables, such as "X", "user_name", and "num_window", will not contribute to the prediction model. I verify this point by plotting the variables vs. the outcome "classe". For example, for "num_window", the following figure shows that there is no correlation between this variable and "classe" (because the original data set is very large, so only a subset is used for plotting)
+
+```{r plot_win, cache=TRUE}
+set.seed(12345)
+in1<-createDataPartition(pmltrain_orig$classe, p = 0.1)[[1]]
+train1<-training[in1,] 
+qplot(num_window, classe, data=train1)
+```
+
+Therefore, the first 7 variables are also removed. 
+```{r, cache=TRUE}
+training<-training[,8:60]
+testing<-testing[,8:60]
+```
+
+# Prediction Model Selection 
+Random forests is a powerful machine learning algorithm, which has demonstrated its high accuracy in many recent competitions and research. Therefore, I choose random forests as the prediction model for this project. 
+
+I use the "train" function in "caret" package, instead of using "randomForest" function directly, because the "train"" function in "caret" package can automatically run cross validation to tune the parameters in the random forest model for optimal performance. For example, random forests is sensitive to model parameter "mtry", the number of variables used for each node to find the best split. The "train"" function in "caret" uses cross validation to find the optimal value of "mtry"", and report in the result. 
+
+#Cross Validation
+There is a very large number of observations (in total 19622) in the training data, but due to the limitation of my machine's hardware configuration, I only use half of them as training and the remaining half for cross validation, although the typical training over cross validation ratio should be larger than this ratio. I also select an even smaller training data to better estimate the out of sample error. 
+
+```{r, cache=TRUE}
+inTrain5 = createDataPartition(training$classe, p = 0.5)[[1]]
+pmltrain5<-training[inTrain5,]
+pmltest5<-training[-inTrain5,]
+inTrain3<-createDataPartition(pmltrain5$classe, p = 0.6)[[1]]
+pmltrain3<-pmltrain5[inTrain3,]
+```
+
+```{r, eval=FALSE}
+rfmod3<-train(classe~., data=pmltrain3, method="rf",
+              trControl=trainControl(method="cv",number=5),
+              importance=TRUE,prox=TRUE)
+```
+
+Then the prediction accuracy of the cross validation data is  
+
+```{r, include=FALSE, cache=TRUE}
+load("rfmod3.rda")
+```
+
+```{r, cache=TRUE}
+confusionMatrix(pmltest5$classe, predict(rfmod3, pmltest5[,-53]))
+```
+
+Using the cross validation data, which is not included to build the model, the accuracy of the prediction model is 0.987, with 95% confidence interval (0.984, 0.989). To further analyze the random forests model, I also investigate the variable importance and plot the model in the following figure. 
+
+```{r, eval=FALSE}
+varImp(rfmod3)
+``` 
+
+```{r, cache=TRUE}
+plot(rfmod3)
+``` 
+
+Then I use 50% of the training data to build the model, and use the remaining 50% as cross validation to estimate the accuracy. 
+
+```{r, eval=FALSE}
+rfmod5<-train(classe~., data=pmltrain5, method="rf",
+              trControl=trainControl(method="cv",number=5),
+              importance=TRUE,prox=TRUE)
+```
+
+```{r, include=FALSE, cache=TRUE}
+load("rfmod5.rda")
+```
+
+```{r, cache=TRUE}
+confusionMatrix(pmltest5$classe, predict(rfmod5, pmltest5[,-53]))
+```
+Using the cross validation data, the accuracy of the prediction model is 0.995, with 95% confidence interval (0.994, 0.997). Similarly, I also print out the variable importance and plot the model. 
+
+```{r, eval=FALSE}
+varImp(rfmod5)
+``` 
+
+```{r}
+plot(rfmod5)
+```
+
+Both of the models have very similar variable importance and report selecting $mtry=27$. 
+
+Ideally, I should repeat this process several times with a larger number of training observations, and use the average of cross validation error to estimate the out of sample error rate. However, due the limitation of my computer hardware, I only perform this process twice as described above. Based on the mean and confidence interval of the cross validation accuracy, the model detail and the plots, I think the estimate the out of sample accuracy should be very high, with the lower bound of 0.98. Meanwhile, I also expect a higher accuracy with a model using more training data, for example, the model using 50% of the training data (rfmod5) should achieve a higher accuracy than the model using 30% of the training data (rfmod3).  
+
+# Testing Result
+Based on the above analysis, I use the model that is trained with the 50% of the training data to predict for the 20 observations in the testing data. The testing error rate is 0.0% (no error), which is very close to the estimated out of sample error rate using the cross validation data in the above session. 
+
+# Summary
+I build a random forests prediction model using 50% of the training data, achieve very high accuracy of 100% on the small testing data set with 20 observations. I also estimate the out of sample accuracy using the remaining 50% of the training data as the cross validation data. The estimated out of sample accuracy, using a large number of observations (9810), is very close to 100.0%. 
